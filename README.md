@@ -121,3 +121,40 @@ Finally, you can build and upload the dataset by:
 bash preprocess.sh
 ```
 Note that the parameters in the `preprocess.sh` should be changed accordingly. For evaluation datasets, `-for_eval` should be used, while for instruction tuning datasets, it should be omitted.
+
+## Pretraining
+1. Preprocessing Data
+
+Transform all text into Json format as:
+
+```json
+{"text": "Your text"}
+```
+
+2. Prepare Environment
+
+Install required packages:
+
+```bash
+pip install -r requirements.txt
+CUDA="Your Cuda Version such as cu113"
+python3 -m pip install --no-cache-dir -U torch==$PYTORCH torchvision torchaudio --extra-index-url https://download.pytorch.org/whl/$CUDA
+python3 -m pip install --no-cache-dir git+https://github.com/huggingface/accelerate@main#egg=accelerate
+python3 -m pip install -y deepspeed
+```
+
+3. Modify and Run Script
+
+Modify scripts/run_pt.sh as needed and then execute it:
+
+```bash
+bash scripts/run_pt.sh
+```
+
+Or modify slurm script `scripts/run_slurm_pt.sh`
+
+
+
+
+
+
