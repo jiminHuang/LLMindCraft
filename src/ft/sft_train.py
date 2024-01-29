@@ -12,6 +12,7 @@ import torch
 import transformers
 from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_int8_training
+from src.ft.pub_pusher import PubCallback
 from src.ft.sample_generator import (
     batch_grouped_sft_generate,
     generate_and_tokenize_prompt,
@@ -52,7 +53,21 @@ class ModelArguments:
     """
     Arguments pertaining to which model/config/tokenizer we are going to fine-tune, or train from scratch.
     """
-
+    revision: Optional[str] = field(
+        default="main",
+    )
+    server_id: Optional[str] = field(
+        default=None,
+    )
+    job_id: Optional[str] = field(
+        default=None,
+    )
+    tasks: Optional[str] = field(
+        default=None,
+    )
+    max_gen_toks: Optional[str] = field(
+        default=None,
+    )
     model_name_or_path: Optional[str] = field(
         default=None,
         metadata={
@@ -228,7 +243,7 @@ def main():
     training_args.data_seed = training_args.seed
 
     if model_args.llama:
-        tokenizer = LlamaTokenizer.from_pretrained(model_args.model_name_or_path)
+        tokenizer = LlamaTokenizer.from_pretrained(model_args.model_name_or_path, revision=model_args.revision)
         print_rank_0(
             "Set the eos_token_id and bos_token_id of LLama model tokenizer",
             log_file,
@@ -243,7 +258,7 @@ def main():
             }
         )
     else:
-        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path, revision=model_args.revision)
         tokenizer.add_special_tokens({"pad_token": tokenizer.unk_token})
     tokenizer.padding_side = "left"  # Allow batched inference
 
@@ -261,22 +276,24 @@ def main():
         # device_map = "auto"
         model = AutoModelForCausalLM.from_pretrained(
             model_args.model_name_or_path,
+            revision=model_args.revision,
             load_in_8bit=True,  # xxx: int8 load in
             device_map=device_map,  # xxx: int8 requires passing device_map
             torch_dtype=torch_dtype,
         )
     else:
         if model_args.llama:
-            config = LlamaConfig.from_pretrained(model_args.model_name_or_path)
-            config.vocab_size = tokenizer.vocab_size
-            config.pad_token_id = tokenizer.pad_token_id
-            config._flash_attn_2_enabled = model_args.use_flash_attention
+            config = LlamaConfig.from_pretrained(model_args.model_name_or_path, revision=model_args.revision)
+            # config.vocab_size = tokenizer.vocab_size
+            # config.pad_token_id = tokenizer.pad_token_id
+            # config._flash_attn_2_enabled = model_args.use_flash_attention
             model = LlamaForCausalLM.from_pretrained(
-                model_args.model_name_or_path, torch_dtype=torch_dtype, config=config
+                model_args.model_name_or_path, revision=model_args.revision, torch_dtype=torch_dtype, config=config
             )
         else:
             model = AutoModelForCausalLM.from_pretrained(
                 model_args.model_name_or_path,
+                revision=model_args.revision,
                 torch_dtype=torch_dtype,
             )
 
@@ -340,22 +357,24 @@ def main():
     # model.is_parallelizable = True
     # model.model_parallel = True
 
-    assert os.path.exists(data_args.train_file), "{} file not exists".format(
-        data_args.train_file
-    )
+    # assert os.path.exists(data_args.train_file), "{} file not exists".format(
+    #     data_args.train_file
+    # )
 
     with torch_distributed_zero_first(global_rank):
         train_data = load_dataset(
-            "json", data_files=data_args.train_file, cache_dir=model_args.cache_dir
+            data_args.train_file, split="train", cache_dir=model_args.cache_dir
+            # "json", data_files=data_args.train_file, cache_dir=model_args.cache_dir
         )
 
         val_data = load_dataset(
-            "json", data_files=data_args.validation_file, cache_dir=model_args.cache_dir
+            data_args.train_file, split="valid[:100]", cache_dir=model_args.cache_dir
+            # "json", data_files=data_args.validation_file, cache_dir=model_args.cache_dir
         )
 
         if data_args.group_sample:
             train_data = (
-                train_data["train"]
+                train_data
                 .shuffle()
                 .map(
                     partial(
@@ -370,7 +389,7 @@ def main():
                 )
             )
 
-            val_data = val_data["train"].map(
+            val_data = val_data.map(
                 partial(
                     batch_grouped_sft_generate,
                     training_args.model_max_length,
@@ -383,7 +402,7 @@ def main():
             )
         else:
             train_data = (
-                train_data["train"]
+                train_data
                 .shuffle()
                 .map(
                     partial(
@@ -395,7 +414,7 @@ def main():
                 )
             )
 
-            val_data = val_data["train"].map(
+            val_data = val_data.map(
                 partial(
                     generate_and_tokenize_prompt,
                     training_args.model_max_length,
@@ -424,7 +443,7 @@ def main():
     # train steps
     t_total = math.ceil(training_nums / batch_size) * training_args.num_train_epochs
     # eval steps
-    training_args.eval_steps = max(t_total // (training_args.num_train_epochs * 4), 5)
+    training_args.eval_steps = 500 # max(t_total // (training_args.num_train_epochs * 4), 5)
     # save steps
     training_args.save_steps = training_args.eval_steps
     training_args.warmup_steps = (
@@ -520,6 +539,7 @@ def main():
         checkpoint = training_args.resume_from_checkpoint
     elif last_checkpoint is not None:
         checkpoint = last_checkpoint
+    trainer.add_callback(PubCallback(model_args.model_name_or_path, model_args.server_id, model_args.job_id, model_args.tasks, model_args.max_gen_toks))
     trainer.train(resume_from_checkpoint=checkpoint)
     trainer.save_model(training_args.output_dir)
     print_rank_0(

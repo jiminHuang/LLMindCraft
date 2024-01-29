@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer
 def apply_lora(model_name_or_path, output_path, lora_path):
     print(f"Loading the base model from {model_name_or_path}")
     base = AutoModelForCausalLM.from_pretrained(
-        model_name_or_path, torch_dtype=torch.float16, low_cpu_mem_usage=True
+        model_name_or_path, torch_dtype=torch.float16
     )
     if args.llama:
         base_tokenizer = LlamaTokenizer.from_pretrained(lora_path)
