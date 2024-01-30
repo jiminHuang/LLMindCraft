@@ -10,3 +10,7 @@ datasets
 einops
 sentencepiece
 tqdm
+boto3
+loguru
+click
+pymongo
